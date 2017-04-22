@@ -13,7 +13,7 @@ var WikiquoteApi = (function() {
   wqa.queryTitles = function(titles, success, error) {
     $.ajax({
       url: API_URL,
-//       dataType: "jsonp",
+      dataType: "jsonp",
       data: {
         format: "json",
         action: "query",
@@ -56,7 +56,7 @@ var WikiquoteApi = (function() {
   wqa.getSectionsForPage = function(pageId, success, error) {
     $.ajax({
       url: API_URL,
-//       dataType: "jsonp",
+      dataType: "jsonp",
             type: 'GET',
       contentType: 'text/plain',
       data: {
@@ -109,7 +109,7 @@ var WikiquoteApi = (function() {
   wqa.getQuotesForSection = function(pageId, sectionIndex, success, error) {
     $.ajax({
       url: API_URL,
-//       dataType: "jsonp",
+      dataType: "jsonp",
       data: {
         format: "json",
         action: "parse",
@@ -118,8 +118,7 @@ var WikiquoteApi = (function() {
         section: sectionIndex
       },
 
-      success: function(result, status){
-          console.log(result);
+      success: function(result, status){          
         var quotes = result.parse.text["*"];
         var anchor = result.parse.sections[0].anchor;
         var quoteArray = [] 
@@ -176,7 +175,7 @@ var WikiquoteApi = (function() {
   wqa.getWikiForSection = function(title, pageId, sec, success, error) {
     $.ajax({
       url: API_URL,
-//       dataType: "jsonp",
+      dataType: "jsonp",
       data: {
         format: "json",
         action: "parse",
@@ -209,7 +208,7 @@ var WikiquoteApi = (function() {
   wqa.openSearch = function(titles, success, error) {
     $.ajax({
       url: API_URL,
-//       dataType: "jsonp",
+      dataType: "jsonp",
       data: {
         format: "json",
         action: "opensearch",
