@@ -13,7 +13,7 @@ var WikiquoteApi = (function() {
   wqa.queryTitles = function(titles, success, error) {
     $.ajax({
       url: API_URL,
-      dataType: "jsonp",
+//       dataType: "jsonp",
       data: {
         format: "json",
         action: "query",
@@ -48,14 +48,17 @@ var WikiquoteApi = (function() {
   /**
    * Get the sections for a given page.
    * This makes parsing for quotes more manageable.
-   * Returns an array of all "1.x" sections as these usually contain the quotes.
-   * If no 1.x sections exists, returns section 1. Returns the titles that were used
+   * Returns an array of all sections that have headings of specific format, like a
+   * letter of the alphabet or a range of letters.
+   * Returns the titles that were used
    * in case there is a redirect.
    */
   wqa.getSectionsForPage = function(pageId, success, error) {
     $.ajax({
       url: API_URL,
-      dataType: "jsonp",
+//       dataType: "jsonp",
+            type: 'GET',
+      contentType: 'text/plain',
       data: {
         format: "json",
         action: "parse",
@@ -66,17 +69,21 @@ var WikiquoteApi = (function() {
       success: function(result, status){
         var sectionArray = [];
         var sections = result.parse.sections;
-        for(var s in sections) {
-          var splitNum = sections[s].number.split('.');
-          if(splitNum.length > 1 && splitNum[0] === "1") {
-            sectionArray.push(sections[s].index);
-          }
+        let size = sections.length;
+        let step = 0;
+        
+        // Get only those sections that have headings of a specific format, like 'A' or 'W-Y'
+        while (step < size) {
+            if(sections[step].line.match(/^[A-Z]( ?- ?[A-Z])?$/)) {
+                sectionArray.push(sections[step].index);
+            }
+            step++;
         }
-        // Use section 1 if there are no "1.x" sections
+
         if(sectionArray.length === 0) {
-          sectionArray.push("1");
-        }
-        success({ titles: result.parse.title, sections: sectionArray });
+          error('Failed to locate a matching section to fetch a quote');
+        } else
+            success({ titles: result.parse.title, sections: sectionArray });
       },
       error: function(xhr, result, status){
         error("Error getting sections");
@@ -97,17 +104,12 @@ var WikiquoteApi = (function() {
    * <ul>
    * <ul> next quote etc... </ul>
    *
-   * The quote may or may not contain sections inside <b /> tags.
-   *
-   * For quotes with bold sections, only the bold part is returned for brevity
-   * (usually the bold part is more well known).
-   * Otherwise the entire text is returned.  Returns the titles that were used
-   * in case there is a redirect.
+   * Returns the titles that were used in case there is a redirect.
    */
   wqa.getQuotesForSection = function(pageId, sectionIndex, success, error) {
     $.ajax({
       url: API_URL,
-      dataType: "jsonp",
+//       dataType: "jsonp",
       data: {
         format: "json",
         action: "parse",
@@ -117,24 +119,49 @@ var WikiquoteApi = (function() {
       },
 
       success: function(result, status){
+          console.log(result);
         var quotes = result.parse.text["*"];
-        var quoteArray = []
+        var anchor = result.parse.sections[0].anchor;
+        var quoteArray = [] 
+        
+        // Find top level <li>s only
+        var $listItems = $(quotes).children('li');
+        
+        let size = $listItems.length;
+        let randomNum = Math.floor(Math.random() * size);        
+        
+        
+        /*
+         * Get text contents of the top-level list items,
+         * by iterating through the elements contained within
+         * and ignoring the text inside the child nodes that are
+         * unordered list items <ul>, because those
+         * don't contain the quote itself
+         */
+        function getTheQuote() {
+            var theQuote = [];
+            $(this).contents().filter(function() { return this.nodeName != "UL"; }).each(function() {                               
+                function getText() {                    
+                    if(this.nodeName == "BR")
+                        theQuote.push('<br />'); 
+                    else if(this.nodeType === 3) {
+                        theQuote.push(this.textContent);
+                    }
+                    else {
+                        $(this).contents().each(function() {
+                            getText.call(this);
+                        });
+                    }
+                }                
+                getText.call(this);              
+            });
+            quoteArray.push(theQuote.join(''));
+        }      
+        
+        // Select a random list item and extract the quote from it
+        getTheQuote.call($listItems.eq(randomNum));
 
-        // Find top level <li> only
-        var $lis = $(quotes).find('li:not(li li)');
-        $lis.each(function() {
-          // Remove all children that aren't <b>
-          $(this).children().remove(':not(b)');
-          var $bolds = $(this).find('b');
-
-          // If the section has bold text, use it.  Otherwise pull the plain text.
-          if($bolds.length > 0) {
-            quoteArray.push($bolds.html());
-          } else {
-            quoteArray.push($(this).html());
-          }
-        });
-        success({ titles: result.parse.title, quotes: quoteArray });
+        success({ titles: result.parse.title, quotes: quoteArray, anchor: anchor });
       },
       error: function(xhr, result, status){
         error("Error getting quotes");
@@ -149,7 +176,7 @@ var WikiquoteApi = (function() {
   wqa.getWikiForSection = function(title, pageId, sec, success, error) {
     $.ajax({
       url: API_URL,
-      dataType: "jsonp",
+//       dataType: "jsonp",
       data: {
         format: "json",
         action: "parse",
@@ -182,7 +209,7 @@ var WikiquoteApi = (function() {
   wqa.openSearch = function(titles, success, error) {
     $.ajax({
       url: API_URL,
-      dataType: "jsonp",
+//       dataType: "jsonp",
       data: {
         format: "json",
         action: "opensearch",
@@ -212,10 +239,10 @@ var WikiquoteApi = (function() {
     var errorFunction = function(msg) {
       error(msg);
     };
-
+    
     var chooseQuote = function(quotes) {
-      var randomNum = Math.floor(Math.random()*quotes.quotes.length);
-      success({ titles: quotes.titles, quote: quotes.quotes[randomNum] });
+        // The step of choosing a random quote is moved to the getQuotesForSection function        
+      success({ titles: quotes.titles, quote: quotes.quotes[0], anchor: quotes.anchor });
     };
 
     var getQuotes = function(pageId, sections) {
@@ -229,6 +256,35 @@ var WikiquoteApi = (function() {
 
     wqa.queryTitles(titles, getSections, errorFunction);
   };
+  
+  
+  /*
+   * Does the same thing as the above function, but bypasses the step
+   * of getting the page id for a search query, by requiring the page id
+   * as an argument
+   */
+  wqa.getRandomQuoteByPageID = function(pageID, success, error) {
+      
+    var errorFunction = function(msg) {
+      error(msg);
+    };
+
+    var chooseQuote = function(quotes) {
+        // The step of choosing a random quote is moved to the getQuotesForSection function
+      success({ titles: quotes.titles, quote: quotes.quotes[0], anchor: quotes.anchor });
+    };
+
+    var getQuotes = function(pageId, sections) {
+      var randomNum = Math.floor(Math.random()*sections.sections.length);
+      wqa.getQuotesForSection(pageId, sections.sections[randomNum], chooseQuote, errorFunction);
+    };
+
+    var getSections = function(pageId) {
+      wqa.getSectionsForPage(pageId, function(sections) { getQuotes(pageId, sections); }, errorFunction);
+    };
+
+    getSections(pageID);
+  }
 
   /**
    * Capitalize the first letter of each word
