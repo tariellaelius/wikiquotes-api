@@ -4,6 +4,9 @@ var WikiquoteApi = (function() {
 
   var API_URL = "https://en.wikiquote.org/w/api.php";
 
+  var defaultMask = [/^[A-Z]( ?- ?[A-Z])?$/];
+  
+  
   /**
    * Query based on "titles" parameter and return page id.
    * If multiple page ids are returned, choose the first one.
@@ -48,12 +51,12 @@ var WikiquoteApi = (function() {
   /**
    * Get the sections for a given page.
    * This makes parsing for quotes more manageable.
-   * Returns an array of all sections that have headings of specific format, like a
-   * letter of the alphabet or a range of letters.
+   * Returns an array of all sections that have headings of a specific format, like a
+   * letter of the alphabet or a range of letters, or other user-defined format.
    * Returns the titles that were used
    * in case there is a redirect.
    */
-  wqa.getSectionsForPage = function(pageId, success, error) {
+  wqa.getSectionsForPage = function(data, success, error) {
     $.ajax({
       url: API_URL,
       dataType: "jsonp",
@@ -63,7 +66,7 @@ var WikiquoteApi = (function() {
         format: "json",
         action: "parse",
         prop: "sections",
-        pageid: pageId
+        pageid: data.pageId
       },
 
       success: function(result, status){
@@ -71,12 +74,29 @@ var WikiquoteApi = (function() {
         var sections = result.parse.sections;
         let size = sections.length;
         let step = 0;
+        let sectionsMask = defaultMask;
         
-        // Get only those sections that have headings of a specific format, like 'A' or 'W-Y'
+        /* Get user-defined custom masks to check against when iterating
+         * through section names on a page */
+        if(data.masks && data.masks.length) {
+            sectionsMask = [];
+            
+            data.masks.forEach(function(mask) {
+                if(mask && typeof mask === 'string') {
+                    let rx = new RegExp(mask);
+                    sectionsMask.push(rx);
+                }
+            });
+        }
+        
+        /* Get only those sections that have headings of a specific format,
+         * which can be either user-defined, or alphabetic (defaultMask), like 'A' or 'W-Y' */
         while (step < size) {
-            if(sections[step].line.match(/^[A-Z]( ?- ?[A-Z])?$/)) {
-                sectionArray.push(sections[step].index);
-            }
+            sectionsMask.forEach(function(mask) {
+                if(mask.test(sections[step].line)) {
+                    sectionArray.push(sections[step].index);
+                }
+            });                        
             step++;
         }
 
@@ -106,7 +126,7 @@ var WikiquoteApi = (function() {
    *
    * Returns the titles that were used in case there is a redirect.
    */
-  wqa.getQuotesForSection = function(pageId, sectionIndex, success, error) {
+  wqa.getQuoteFromSection = function(pageId, sectionIndex, success, error) {
     $.ajax({
       url: API_URL,
       dataType: "jsonp",
@@ -118,8 +138,11 @@ var WikiquoteApi = (function() {
         section: sectionIndex
       },
 
-      success: function(result, status){          
+      success: function(result, status) {          
         var quotes = result.parse.text["*"];
+        /* Prevent images from being requested unnecessarily (by removing
+         * the src(set) attributes from the html text), when building the jQuery objects below */
+        quotes = quotes.replace(/src(set)?=\".*?"/g, '');
         var anchor = result.parse.sections[0].anchor;
         var quoteArray = [] 
         
@@ -227,62 +250,43 @@ var WikiquoteApi = (function() {
   };
 
   /**
-   * Get a random quote for the given title search.
-   * This function searches for a page id for the given title, chooses a random
-   * section from the list of sections for the page, and then chooses a random
-   * quote from that section.  Returns the titles that were used in case there
-   * is a redirect.
+   * Query Wikiquotes API based on a given title to get it's page id
+   * and pass that to the next function, which chooses a random
+   * quote from a random section on that page
    */
-  wqa.getRandomQuote = function(titles, success, error) {
+  wqa.getRandomQuote = function(data, success, error) {
 
     var errorFunction = function(msg) {
       error(msg);
     };
     
-    var chooseQuote = function(quotes) {
-        // The step of choosing a random quote is moved to the getQuotesForSection function        
-      success({ titles: quotes.titles, quote: quotes.quotes[0], anchor: quotes.anchor });
-    };
-
-    var getQuotes = function(pageId, sections) {
-      var randomNum = Math.floor(Math.random()*sections.sections.length);
-      wqa.getQuotesForSection(pageId, sections.sections[randomNum], chooseQuote, errorFunction);
-    };
-
-    var getSections = function(pageId) {
-      wqa.getSectionsForPage(pageId, function(sections) { getQuotes(pageId, sections); }, errorFunction);
-    };
-
-    wqa.queryTitles(titles, getSections, errorFunction);
-  };
-  
+    wqa.queryTitles(data.title, function(pageId) { wqa.getRandomQuoteByPageID({pageId: pageId, masks: data.masks}, success, error); } , errorFunction);
+  };  
   
   /*
-   * Does the same thing as the above function, but bypasses the step
-   * of getting the page id for a search query, by requiring the page id
-   * as an argument
+   * Gets quotes from a page by first getting sections that have a heading conforming to a 
+   * user-defined mask (if any). Otherwise, defaultMask is used to check
+   * for headings. Randomly chooses one of these sections, then randomly chooses and extracts a quote,
+   * which it passes to the callback function, together with the page title and the quote anchor on the page
    */
-  wqa.getRandomQuoteByPageID = function(pageID, success, error) {
+  wqa.getRandomQuoteByPageID = function(data, success, error) {
       
     var errorFunction = function(msg) {
       error(msg);
     };
 
-    var chooseQuote = function(quotes) {
-        // The step of choosing a random quote is moved to the getQuotesForSection function
-      success({ titles: quotes.titles, quote: quotes.quotes[0], anchor: quotes.anchor });
-    };
-
-    var getQuotes = function(pageId, sections) {
+    var getQuote = function(pageId, sections) {
       var randomNum = Math.floor(Math.random()*sections.sections.length);
-      wqa.getQuotesForSection(pageId, sections.sections[randomNum], chooseQuote, errorFunction);
+      wqa.getQuoteFromSection(pageId, sections.sections[randomNum], function(quotes) {
+          success({ titles: quotes.titles, quote: quotes.quotes[0], anchor: quotes.anchor });
+    }, errorFunction);
     };
 
-    var getSections = function(pageId) {
-      wqa.getSectionsForPage(pageId, function(sections) { getQuotes(pageId, sections); }, errorFunction);
+    var getSections = function(data) {
+      wqa.getSectionsForPage(data, function(sections) { getQuote(data.pageId, sections); }, errorFunction);
     };
 
-    getSections(pageID);
+    getSections(data);
   }
 
   /**
