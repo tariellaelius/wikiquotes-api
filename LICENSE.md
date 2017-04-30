@@ -1,4 +1,5 @@
-Copyright (c) 2013 Nate Tyler
+Copyright for portions of this project are held by (c) 2013 Nate Tyler.
+All other copyright are held by (c) 2017 Tariel Laelius
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -4,6 +4,9 @@ var WikiquoteApi = (function() {
 
   var API_URL = "https://en.wikiquote.org/w/api.php";
 
+  var defaultMask = [/^[A-Z]( ?- ?[A-Z])?$/];
+  
+  
   /**
    * Query based on "titles" parameter and return page id.
    * If multiple page ids are returned, choose the first one.
@@ -48,35 +51,59 @@ var WikiquoteApi = (function() {
   /**
    * Get the sections for a given page.
    * This makes parsing for quotes more manageable.
-   * Returns an array of all "1.x" sections as these usually contain the quotes.
-   * If no 1.x sections exists, returns section 1. Returns the titles that were used
+   * Returns an array of all sections that have headings of a specific format, like a
+   * letter of the alphabet or a range of letters, or other user-defined format.
+   * Returns the titles that were used
    * in case there is a redirect.
    */
-  wqa.getSectionsForPage = function(pageId, success, error) {
+  wqa.getSectionsForPage = function(data, success, error) {
     $.ajax({
       url: API_URL,
       dataType: "jsonp",
+            type: 'GET',
+      contentType: 'text/plain',
       data: {
         format: "json",
         action: "parse",
         prop: "sections",
-        pageid: pageId
+        pageid: data.pageId
       },
 
       success: function(result, status){
         var sectionArray = [];
         var sections = result.parse.sections;
-        for(var s in sections) {
-          var splitNum = sections[s].number.split('.');
-          if(splitNum.length > 1 && splitNum[0] === "1") {
-            sectionArray.push(sections[s].index);
-          }
+        let size = sections.length;
+        let step = 0;
+        let sectionsMask = defaultMask;
+        
+        /* Get user-defined custom masks to check against when iterating
+         * through section names on a page */
+        if(data.masks && data.masks.length) {
+            sectionsMask = [];
+            
+            data.masks.forEach(function(mask) {
+                if(mask && typeof mask === 'string') {
+                    let rx = new RegExp(mask);
+                    sectionsMask.push(rx);
+                }
+            });
         }
-        // Use section 1 if there are no "1.x" sections
+        
+        /* Get only those sections that have headings of a specific format,
+         * which can be either user-defined, or alphabetic (defaultMask), like 'A' or 'W-Y' */
+        while (step < size) {
+            sectionsMask.forEach(function(mask) {
+                if(mask.test(sections[step].line)) {
+                    sectionArray.push(sections[step].index);
+                }
+            });                        
+            step++;
+        }
+
         if(sectionArray.length === 0) {
-          sectionArray.push("1");
-        }
-        success({ titles: result.parse.title, sections: sectionArray });
+          error('Failed to locate a matching section to fetch a quote');
+        } else
+            success({ titles: result.parse.title, sections: sectionArray });
       },
       error: function(xhr, result, status){
         error("Error getting sections");
@@ -97,14 +124,9 @@ var WikiquoteApi = (function() {
    * <ul>
    * <ul> next quote etc... </ul>
    *
-   * The quote may or may not contain sections inside <b /> tags.
-   *
-   * For quotes with bold sections, only the bold part is returned for brevity
-   * (usually the bold part is more well known).
-   * Otherwise the entire text is returned.  Returns the titles that were used
-   * in case there is a redirect.
+   * Returns the titles that were used in case there is a redirect.
    */
-  wqa.getQuotesForSection = function(pageId, sectionIndex, success, error) {
+  wqa.getQuoteFromSection = function(pageId, sectionIndex, success, error) {
     $.ajax({
       url: API_URL,
       dataType: "jsonp",
@@ -116,25 +138,52 @@ var WikiquoteApi = (function() {
         section: sectionIndex
       },
 
-      success: function(result, status){
+      success: function(result, status) {          
         var quotes = result.parse.text["*"];
-        var quoteArray = []
+        /* Prevent images from being requested unnecessarily (by removing
+         * the src(set) attributes from the html text), when building the jQuery objects below */
+        quotes = quotes.replace(/src(set)?=\".*?"/g, '');
+        var anchor = result.parse.sections[0].anchor;
+        var quoteArray = [] 
+        
+        // Find top level <li>s only
+        var $listItems = $(quotes).children('li');
+        
+        let size = $listItems.length;
+        let randomNum = Math.floor(Math.random() * size);        
+        
+        
+        /*
+         * Get text contents of the top-level list items,
+         * by iterating through the elements contained within
+         * and ignoring the text inside the child nodes that are
+         * unordered list items <ul>, because those
+         * don't contain the quote itself
+         */
+        function getTheQuote() {
+            var theQuote = [];
+            $(this).contents().filter(function() { return this.nodeName != "UL"; }).each(function() {                               
+                function getText() {                    
+                    if(this.nodeName == "BR")
+                        theQuote.push('<br />'); 
+                    else if(this.nodeType === 3) {
+                        theQuote.push(this.textContent);
+                    }
+                    else {
+                        $(this).contents().each(function() {
+                            getText.call(this);
+                        });
+                    }
+                }                
+                getText.call(this);              
+            });
+            quoteArray.push(theQuote.join(''));
+        }      
+        
+        // Select a random list item and extract the quote from it
+        getTheQuote.call($listItems.eq(randomNum));
 
-        // Find top level <li> only
-        var $lis = $(quotes).find('li:not(li li)');
-        $lis.each(function() {
-          // Remove all children that aren't <b>
-          $(this).children().remove(':not(b)');
-          var $bolds = $(this).find('b');
-
-          // If the section has bold text, use it.  Otherwise pull the plain text.
-          if($bolds.length > 0) {
-            quoteArray.push($bolds.html());
-          } else {
-            quoteArray.push($(this).html());
-          }
-        });
-        success({ titles: result.parse.title, quotes: quoteArray });
+        success({ titles: result.parse.title, quotes: quoteArray, anchor: anchor });
       },
       error: function(xhr, result, status){
         error("Error getting quotes");
@@ -201,34 +250,44 @@ var WikiquoteApi = (function() {
   };
 
   /**
-   * Get a random quote for the given title search.
-   * This function searches for a page id for the given title, chooses a random
-   * section from the list of sections for the page, and then chooses a random
-   * quote from that section.  Returns the titles that were used in case there
-   * is a redirect.
+   * Query Wikiquotes API based on a given title to get it's page id
+   * and pass that to the next function, which chooses a random
+   * quote from a random section on that page
    */
-  wqa.getRandomQuote = function(titles, success, error) {
+  wqa.getRandomQuote = function(data, success, error) {
 
     var errorFunction = function(msg) {
       error(msg);
     };
-
-    var chooseQuote = function(quotes) {
-      var randomNum = Math.floor(Math.random()*quotes.quotes.length);
-      success({ titles: quotes.titles, quote: quotes.quotes[randomNum] });
+    
+    wqa.queryTitles(data.title, function(pageId) { wqa.getRandomQuoteByPageID({pageId: pageId, masks: data.masks}, success, error); } , errorFunction);
+  };  
+  
+  /*
+   * Gets quotes from a page by first getting sections that have a heading conforming to a 
+   * user-defined mask (if any). Otherwise, defaultMask is used to check
+   * for headings. Randomly chooses one of these sections, then randomly chooses and extracts a quote,
+   * which it passes to the callback function, together with the page title and the quote anchor on the page
+   */
+  wqa.getRandomQuoteByPageID = function(data, success, error) {
+      
+    var errorFunction = function(msg) {
+      error(msg);
     };
 
-    var getQuotes = function(pageId, sections) {
+    var getQuote = function(pageId, sections) {
       var randomNum = Math.floor(Math.random()*sections.sections.length);
-      wqa.getQuotesForSection(pageId, sections.sections[randomNum], chooseQuote, errorFunction);
+      wqa.getQuoteFromSection(pageId, sections.sections[randomNum], function(quotes) {
+          success({ titles: quotes.titles, quote: quotes.quotes[0], anchor: quotes.anchor });
+    }, errorFunction);
     };
 
-    var getSections = function(pageId) {
-      wqa.getSectionsForPage(pageId, function(sections) { getQuotes(pageId, sections); }, errorFunction);
+    var getSections = function(data) {
+      wqa.getSectionsForPage(data, function(sections) { getQuote(data.pageId, sections); }, errorFunction);
     };
 
-    wqa.queryTitles(titles, getSections, errorFunction);
-  };
+    getSections(data);
+  }
 
   /**
    * Capitalize the first letter of each word
